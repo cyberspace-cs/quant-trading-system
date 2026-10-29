@@ -1,0 +1,23 @@
+# Go
+/go/bin/
+*.exe
+*.test
+*.out
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.png
+!docs/*.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 本地数据
+/data/
+*.csv
+!sql/*.csv
