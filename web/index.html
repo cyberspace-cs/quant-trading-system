@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QUANT · 中高频量化工作台</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="app">
+  <!-- 左侧细导航 -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark"><span class="ring"></span><span class="ring r2"></span></div>
+      <div class="brand-txt">
+        <b>QUANT</b>
+        <small>中高频量化工作台</small>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <a class="nav-item active" data-view="overview"><i>01</i><span>总览</span></a>
+      <a class="nav-item" data-view="positions"><i>02</i><span>持仓</span></a>
+      <a class="nav-item" data-view="orders"><i>03</i><span>订单</span></a>
+      <a class="nav-item" data-view="fills"><i>04</i><span>成交</span></a>
+      <a class="nav-item" data-view="signals"><i>05</i><span>信号</span></a>
+      <a class="nav-item" data-view="risk"><i>06</i><span>风控</span></a>
+      <a class="nav-item" data-view="strategies"><i>07</i><span>策略</span></a>
+      <a class="nav-item" data-view="reconcile"><i>08</i><span>对账</span></a>
+    </nav>
+
+    <div class="rail-foot">
+      <div class="status-line"><span class="dot live" id="liveDot"></span><span id="tradeStatus">盘中</span></div>
+      <div class="latency">下单延迟 <b id="latency">—</b> µs</div>
+      <p class="compliance">基金有风险，投资需谨慎。本页面为系统演示，不构成投资建议。</p>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb">
+        <span class="eyebrow">WORKBENCH / 交易日</span>
+        <h1 id="pageTitle">总览</h1>
+      </div>
+      <div class="top-actions">
+        <div class="meta"><span>交易日</span><b id="tradeDate">—</b></div>
+        <div class="meta"><span>账户</span><b id="accountId">—</b></div>
+        <div class="pill" id="statusPill">盘中</div>
+        <button class="ghost" id="refreshBtn">刷新</button>
+      </div>
+    </header>
+
+    <!-- 资产 Hero -->
+    <section class="hero">
+      <div class="hero-blobs" aria-hidden="true">
+        <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+      </div>
+      <div class="hero-left">
+        <div class="label">账户总资产 · 实时</div>
+        <div class="big" id="totalAssets">—</div>
+        <div class="sub">
+          <span class="delta" id="dayPnl">—</span>
+          <span class="muted" id="dayPnlPct">—</span>
+          <span class="sep"></span>
+          <span class="muted">净值</span>
+          <b id="navVal">—</b>
+        </div>
+      </div>
+      <div class="hero-right">
+        <canvas id="spark" width="420" height="120"></canvas>
+      </div>
+    </section>
+
+    <!-- KPI -->
+    <section class="kpis">
+      <div class="kpi"><div class="k-label">当日盈亏</div><div class="k-val" id="kPnl">—</div><div class="k-hint">已实现 + 浮动</div></div>
+      <div class="kpi"><div class="k-label">最大回撤</div><div class="k-val" id="kDd">—</div><div class="k-hint">日内峰值回撤</div></div>
+      <div class="kpi"><div class="k-label">夏普比率</div><div class="k-val" id="kSharpe">—</div><div class="k-hint">年化滚动</div></div>
+      <div class="kpi"><div class="k-label">换手率</div><div class="k-val" id="kTurn">—</div><div class="k-hint">成交额 / 资产</div></div>
+    </section>
+
+    <!-- 图表区 -->
+    <section class="grid-2">
+      <div class="panel">
+        <div class="panel-head"><h2>净值曲线</h2><span class="tag" id="eqTag">实时</span></div>
+        <canvas id="equity" width="900" height="260"></canvas>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>行业暴露</h2><span class="tag">按市值</span></div>
+        <div id="industry" class="industry"></div>
+        <div class="panel-head" style="margin-top:22px"><h2>策略开关</h2><span class="tag">可灰度/熔断</span></div>
+        <div id="strategies" class="strategies"></div>
+      </div>
+    </section>
+
+    <!-- 数据表 -->
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <h2 id="tableTitle">持仓</h2>
+        <div class="tabs" id="tabs">
+          <button class="tab active" data-view="positions">持仓</button>
+          <button class="tab" data-view="orders">订单</button>
+          <button class="tab" data-view="fills">成交</button>
+          <button class="tab" data-view="signals">信号</button>
+          <button class="tab" data-view="risk">风控</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="dataTable"><thead></thead><tbody></tbody></table></div>
+      <div class="empty" id="emptyHint" hidden>暂无数据</div>
+    </section>
+
+    <footer class="foot">
+      <span>quant-trading-system · 五层事件驱动架构</span>
+      <span>回测 / 仿真 / 实盘 三环境隔离 · 盘后三账合一</span>
+    </footer>
+  </main>
+</div>
+<script src="./app.js"></script>
+</body>
+</html>

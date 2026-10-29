@@ -62,14 +62,20 @@ quant-trading-system/
 │   ├── 01_schema.sql          # MySQL 工业级建表（持仓/订单/成交/资金/风控/绩效）
 │   └── 02_init_data.sql       # 初始化配置数据
 ├── go/                        # 实盘引擎（Go，低延迟）
-│   ├── cmd/main.go            # 编排入口：装配五层 + 事件总线
+│   ├── cmd/main.go            # CLI 编排：装配五层 + 端到端演示
+│   ├── cmd/server/main.go     # 工作台服务：仿真循环 + HTTP/SSE + 静态托管
 │   └── internal/
 │       ├── common/            # 领域模型：Tick/Order/Signal/Position/PnL
 │       ├── data/              # 数据中台：行情订阅 + 因子写入 Redis
 │       ├── strategy/          # 策略引擎：多因子打分 + 信号聚合
 │       ├── risk/              # 风控引擎：事前/事中/事后
 │       ├── execution/         # 交易执行：拆单 + 订单状态机 + OMS
-│       └── ledger/            # 资产台账：MySQL 落地 + 盘后对账
+│       ├── ledger/            # 资产台账：MySQL 落地 + 盘后对账
+│       └── api/               # HTTP/SSE 接口层：overview/positions/orders/risk…
+├── web/                       # 交易工作台前端（零依赖，原生 JS + Canvas）
+│   ├── index.html
+│   ├── style.css              # 九坤风格：近白底 / 超大衬线数字 / 低饱和撞色
+│   └── app.js                 # REST 拉取 + SSE 实时 + Canvas 图表
 └── python/                    # 研究平台（Python，因子/回测）
     ├── factors/               # 因子工厂：量价/基本面/AI 因子
     ├── strategies/            # 多因子选股 / 日内 / 套利
@@ -119,7 +125,25 @@ mysql -uroot -p quant < sql/02_init_data.sql
 
 ---
 
-## 七、与普通业务系统的本质区别（面试绝杀）
+## 七、Web 交易工作台（九坤风格）
+
+设计语言借鉴九坤官网：**近白暖底 + 超大衬线数字 + 低饱和撞色 + 细线大留白**，
+内容换成交易运维：总资产、净值曲线、行业暴露、策略开关、持仓/订单/风控。
+
+![工作台总览](docs/web_dashboard.png)
+
+```bash
+cd go && go run ./cmd/server -addr :8080 -web ../web
+# 打开 http://localhost:8080
+```
+
+- 后端：`internal/api` 提供 19 个 REST/SSE 接口（overview/positions/orders/fills/signals/risk/strategies/reconcile/stream…）
+- 前端：`web/` 零依赖原生 JS，SSE 每秒推送总览，Canvas 自绘净值曲线与迷你走势
+- 详见 [docs/08-frontend-api.md](docs/08-frontend-api.md)：九坤官网拆解 + 前端设计 + **后端接口缺口清单**
+
+---
+
+## 八、与普通业务系统的本质区别（面试绝杀）
 
 | 系统 | 一致性 | 核心矛盾 | 延迟诉求 |
 |------|--------|----------|----------|
@@ -131,6 +155,6 @@ mysql -uroot -p quant < sql/02_init_data.sql
 
 ---
 
-## 八、License
+## 九、License
 
 MIT · 仅用于学习与面试复盘，实盘须接入合规柜台与风控。
