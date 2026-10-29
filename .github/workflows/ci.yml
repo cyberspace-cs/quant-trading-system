@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  go:
+    name: Go · build / vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build
+        working-directory: go
+        run: go build ./...
+      - name: Vet
+        working-directory: go
+        run: go vet ./...
+      - name: Test
+        working-directory: go
+        run: go test ./... -count=1 -race
+
+  python:
+    name: Python · 语法与回测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r python/requirements.txt
+      - name: Syntax check
+        run: python -m compileall -q python
+      - name: Backtest smoke
+        working-directory: python
+        run: python -m backtest.run --strategy multi_factor --top-n 8 --rebalance 5
+
+  api-smoke:
+    name: API · 端到端冒烟（61 项断言）
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build server
+        working-directory: go
+        run: go build -o /tmp/qserver ./cmd/server
+      - name: Start workbench
+        run: |
+          cd go && /tmp/qserver -addr :8080 -web ../web &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/api/v1/health >/dev/null && break
+            sleep 1
+          done
+          sleep 6
+      - name: Smoke test
+        run: python3 scripts/smoke_test.py

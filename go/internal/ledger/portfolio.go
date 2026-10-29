@@ -142,6 +142,18 @@ func (p *Portfolio) RealizedPnL() float64 {
 	return p.realized
 }
 
+// AdjustCash 出入金：外部资金划转（审批通过后调用），不影响已实现盈亏。
+func (p *Portfolio) AdjustCash(delta float64) float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.capital.Available += delta
+	if p.capital.Available < 0 {
+		p.capital.Available = 0
+	}
+	p.recalcTotalLocked()
+	return p.capital.Available
+}
+
 func (p *Portfolio) OrderCount() int   { p.mu.RLock(); defer p.mu.RUnlock(); return len(p.orders) }
 func (p *Portfolio) FillCount() int    { p.mu.RLock(); defer p.mu.RUnlock(); return len(p.fills) }
 func (p *Portfolio) RiskLogCount() int { p.mu.RLock(); defer p.mu.RUnlock(); return len(p.riskLogs) }

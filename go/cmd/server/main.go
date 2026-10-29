@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"quant/internal/api"
@@ -21,6 +22,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP 监听地址")
 	webDir := flag.String("web", "../web", "前端静态目录")
+	secret := flag.String("secret", "quant-dev-secret-change-in-production", "JWT 签名密钥（生产从 KMS 注入）")
 	flag.Parse()
 
 	accountID := "ACC01"
@@ -65,6 +67,9 @@ func main() {
 	}
 	state.RecordEquity()
 
+	// 熔断开关：API 层 /system/halt 触发后，仿真循环立即停止生成新信号
+	var halted atomic.Bool
+
 	// ---------- 仿真交易循环（后台）----------
 	go func() {
 		feed := data.NewMockFeed(symbols, 500000)
@@ -90,9 +95,9 @@ func main() {
 			}
 			round++
 
-			if round%8 == 0 && !intraRisk.Halted() {
+			if round%25 == 0 && !intraRisk.Halted() && !halted.Load() && state.TradeStatus != "halt" {
 				pos := book.Positions()
-				sigs := gen.Generate(fc, symbols, book.Capital().Total, pos, prices, common.NowMs())
+				sigs := gen.Generate(fc, symbols, state.TotalAssets(), pos, prices, common.NowMs())
 				for _, sig := range strategy.Aggregate(sigs) {
 					state.RecordSignal(sig)
 					ctx := &risk.Context{
@@ -113,9 +118,19 @@ func main() {
 					if sig.Qty > 20000 {
 						algo = execution.VWAP
 					}
+					var filled int64
 					for _, child := range execution.Slice(parent, algo, 3, 1000, common.NowMs()) {
 						oms.Submit(&child)
+						filled += child.FilledQty
 					}
+					// 母单同样落台账（订单列表只展示母单，子单在详情里看拆单结果）
+					parent.FilledQty = filled
+					if filled >= parent.OrigQty {
+						parent.Status = common.Filled
+					} else if filled > 0 {
+						parent.Status = common.Partial
+					}
+					book.SaveOrder(&parent)
 				}
 			}
 			state.RecordEquity()
@@ -123,7 +138,28 @@ func main() {
 		}
 	}()
 
-	srv := &http.Server{Addr: *addr, Handler: api.NewServer(state, *webDir).Handler()}
+	// ---------- 接口层：装配回调，让「改参数 / 一键熔断」真正作用到引擎 ----------
+	app := api.NewServer(state, *webDir)
+	app.SetSecret(*secret)
+	app.OnHalt = func(h bool, reason string) {
+		halted.Store(h)
+		log.Printf("[halt] halt=%v reason=%s", h, reason)
+	}
+	app.OnParams = func(id string, p map[string]float64) {
+		if id != "alpha_mf" {
+			return
+		}
+		w := map[string]float64{"momentum_20d": 1.0, "rev_5d": 0.3, "vol_20d": -0.5}
+		for k := range w {
+			if v, ok := p[k]; ok {
+				w[k] = v
+			}
+		}
+		engine.SetWeights(w)
+		log.Printf("[params] strategy=%s weights=%v", id, w)
+	}
+
+	srv := &http.Server{Addr: *addr, Handler: app.Handler()}
 	log.Printf("quant workbench listening on %s  (web=%s)", *addr, *webDir)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

@@ -31,18 +31,26 @@ func (b *MockBroker) Place(o *common.Order) ([]common.Fill, error) {
 	}
 
 	// 拆两笔回执：60% + 40%（不足 200 股则单笔全成）
+	// 单笔 >=500 股只成交 80%：留 20% 在途，用于演示 PARTIAL 状态下的改单/撤单与补单逻辑
 	var parts []int64
-	if o.OrigQty >= 200 {
-		q1 := o.OrigQty / 5 * 3 / 100 * 100
+	fillQty := o.OrigQty
+	if o.OrigQty >= 500 {
+		fillQty = o.OrigQty * 8 / 10 / 100 * 100
+		if fillQty <= 0 {
+			fillQty = o.OrigQty
+		}
+	}
+	if fillQty >= 200 {
+		q1 := fillQty / 5 * 3 / 100 * 100
 		if q1 <= 0 {
-			q1 = o.OrigQty / 2 / 100 * 100
+			q1 = fillQty / 2 / 100 * 100
 		}
 		if q1 <= 0 {
-			q1 = o.OrigQty
+			q1 = fillQty
 		}
-		parts = []int64{q1, o.OrigQty - q1}
+		parts = []int64{q1, fillQty - q1}
 	} else {
-		parts = []int64{o.OrigQty}
+		parts = []int64{fillQty}
 	}
 
 	now := common.NowMs()

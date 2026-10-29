@@ -51,6 +51,7 @@ type AppState struct {
 
 	Market  map[string]common.Tick
 	Factors map[string]map[string]float64
+	History map[string][]common.Tick // 逐笔历史（供 K 线聚合 / 行情回放）
 
 	Signals    []common.Signal
 	Strategies []*StrategyInfo
@@ -61,18 +62,41 @@ type AppState struct {
 	TradeDate   string
 	TradeStatus string // pre/open/mid/close
 	RiskRejects int
+
+	S     *Stores   // 可写域对象（参数版本/规则/因子库/划转/任务/回测）
+	Audit *AuditLog // 写操作审计
 }
 
 func NewAppState(accountID string, initial float64, book *ledger.Portfolio,
 	cache common.Cache, bus common.EventBus, oms *execution.OMS, pre *risk.PreTradeEngine,
 	symbols []string, industry map[string]string, intIDs map[string]int) *AppState {
-	return &AppState{
+	st := &AppState{
 		AccountID: accountID, Initial: initial, Book: book, Cache: cache, Bus: bus,
 		OMS: oms, PreRisk: pre, Symbols: symbols, Industry: industry, IntIDs: intIDs,
 		Market: map[string]common.Tick{}, Factors: map[string]map[string]float64{},
+		History: map[string][]common.Tick{},
 		PeakNav: 1.0, LatencyUs: 320, TradeDate: time.Now().Format("2006-01-02"),
 		TradeStatus: "open",
+		S:           NewStores(pre),
+		Audit:       NewAuditLog(4000),
 	}
+	// 给三条策略各灌一个初始参数版本 v1（active），后续热更新在此基础上叠加
+	st.S.AddParamVersion("alpha_mf", &ParamVersion{
+		Ver: 1, Status: "active", Author: "system", Reason: "初始化默认参数", RiskLevel: "low",
+		Params:    map[string]float64{"momentum_20d": 1.0, "rev_5d": 0.3, "vol_20d": -0.5, "top_n": 3, "rebalance_min": 5},
+		CreatedAt: time.Now().UnixMilli(), AppliedAt: time.Now().UnixMilli(),
+	})
+	st.S.AddParamVersion("intraday_mr", &ParamVersion{
+		Ver: 1, Status: "active", Author: "system", Reason: "初始化默认参数", RiskLevel: "low",
+		Params:    map[string]float64{"zscore_entry": 1.8, "hold_min": 25, "stop_loss": 0.008},
+		CreatedAt: time.Now().UnixMilli(), AppliedAt: time.Now().UnixMilli(),
+	})
+	st.S.AddParamVersion("ai_lstm", &ParamVersion{
+		Ver: 1, Status: "active", Author: "system", Reason: "初始化默认参数", RiskLevel: "low",
+		Params:    map[string]float64{"seq_len": 60, "hidden": 128, "lr": 0.0003, "dropout": 0.2},
+		CreatedAt: time.Now().UnixMilli(), AppliedAt: time.Now().UnixMilli(),
+	})
+	return st
 }
 
 // ---------- 写入（仿真循环调用）----------
@@ -81,6 +105,12 @@ func (s *AppState) RecordTick(t common.Tick, factors map[string]float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Market[t.Symbol] = t
+	// 滚动保留最近 3000 笔，供 /market/kline 聚合与行情回放
+	h := append(s.History[t.Symbol], t)
+	if len(h) > 3000 {
+		h = h[len(h)-3000:]
+	}
+	s.History[t.Symbol] = h
 	if s.Factors[t.Symbol] == nil {
 		s.Factors[t.Symbol] = map[string]float64{}
 	}
@@ -515,6 +545,73 @@ func (s *AppState) Reconcile() ReconcileView {
 }
 
 func (s *AppState) CancelOrder(id string) bool { return s.Book.CancelOrder(id) }
+
+// ---------- 供写接口使用的辅助方法 ----------
+
+// PriceOf 最新价（无行情时回落到持仓成本）
+func (s *AppState) PriceOf(symbol string) float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if t, ok := s.Market[symbol]; ok && t.Last > 0 {
+		return t.Last
+	}
+	return 0
+}
+
+// Snapshot 事前风控所需上下文（一次加锁取全，避免 Check 过程中数据漂移）
+func (s *AppState) Snapshot() *risk.Context {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prices := make(map[string]float64, len(s.Market))
+	for k, v := range s.Market {
+		prices[k] = v.Last
+	}
+	cap := s.Book.Capital()
+	// 风控口径必须是「盯市总资产」而不是「可用资金 + 成本市值」：
+	// 后者会随建仓消耗现金而收缩，导致仓位占比虚高，把正常单子全拦掉。
+	cap.Total = s.mtmTotal()
+	if cap.Total > 0 {
+		cap.Nav = cap.Total / s.Initial
+	}
+	return &risk.Context{
+		Positions: s.Book.Positions(), Capital: &cap, Industry: s.Industry,
+		Prices: prices, DayPnL: s.Book.RealizedPnL(),
+	}
+}
+
+// TotalAssets 盯市总资产
+func (s *AppState) TotalAssets() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mtmTotal()
+}
+
+// HistoryOf 返回某标的逐笔历史副本
+func (s *AppState) HistoryOf(symbol string) []common.Tick {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.History[symbol]
+	out := make([]common.Tick, len(src))
+	copy(out, src)
+	return out
+}
+
+// TickOf 最新盘口
+func (s *AppState) TickOf(symbol string) (common.Tick, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.Market[symbol]
+	return t, ok
+}
+
+// SymbolsCopy 标的列表副本
+func (s *AppState) SymbolsCopy() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, len(s.Symbols))
+	copy(out, s.Symbols)
+	return out
+}
 
 // ---------- 工具 ----------
 

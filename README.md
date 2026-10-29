@@ -57,7 +57,9 @@ quant-trading-system/
 │   ├── 04-sequence.md         # 全链路时序（盘前→盘中→盘后）
 │   ├── 05-risk-system.md      # 矩阵式三层风控体系
 │   ├── 06-deployment.md       # K8s 部署 / 三环境隔离 / 容灾
-│   └── 07-interview.md        # 1 分钟口述 + 高端追问
+│   ├── 07-interview.md        # 1 分钟口述 + 高端追问
+│   ├── 08-frontend-api.md     # 九坤官网拆解 + 前端设计 + 接口缺口清单
+│   └── 09-api-complete.md     # 65 个接口全量落地：RBAC/幂等/限流/审计/审批
 ├── sql/
 │   ├── 01_schema.sql          # MySQL 工业级建表（持仓/订单/成交/资金/风控/绩效）
 │   └── 02_init_data.sql       # 初始化配置数据
@@ -71,11 +73,23 @@ quant-trading-system/
 │       ├── risk/              # 风控引擎：事前/事中/事后
 │       ├── execution/         # 交易执行：拆单 + 订单状态机 + OMS
 │       ├── ledger/            # 资产台账：MySQL 落地 + 盘后对账
-│       └── api/               # HTTP/SSE 接口层：overview/positions/orders/risk…
+│       └── api/               # 接口层（19 文件 / 65 路由）
+│           ├── server.go      # 路由表 + 中间件链
+│           ├── httpx.go       # 统一 envelope / 错误码 / 分页
+│           ├── jwt.go         # 手写 HS256
+│           ├── auth.go        # 登录 / RBAC 5 角色 9 权限
+│           ├── ratelimit.go   # 令牌桶 + 幂等键
+│           ├── audit.go       # 写操作审计
+│           ├── store.go       # 参数版本 / 规则 / 因子库 / 划转 / 任务
+│           ├── handlers_*.go  # 交易 / 风控 / 策略 / 因子 / 报表 / 系统
+│           ├── ws.go          # 手写 RFC6455 WebSocket
+│           └── openapi.go     # OpenAPI 3.0 + 自包含文档页
 ├── web/                       # 交易工作台前端（零依赖，原生 JS + Canvas）
-│   ├── index.html
+│   ├── index.html             # 登录门禁 + 14 视图外壳
 │   ├── style.css              # 九坤风格：近白底 / 超大衬线数字 / 低饱和撞色
-│   └── app.js                 # REST 拉取 + SSE 实时 + Canvas 图表
+│   └── app.js                 # REST + WebSocket + Canvas + 写操作
+├── scripts/
+│   └── smoke_test.py          # 端到端冒烟：61 项断言覆盖 14 个场景
 └── python/                    # 研究平台（Python，因子/回测）
     ├── factors/               # 因子工厂：量价/基本面/AI 因子
     ├── strategies/            # 多因子选股 / 日内 / 套利
@@ -121,25 +135,76 @@ python -m backtest.run --strategy multi_factor --start 20240101 --end 20240630
 # 3) 建库
 mysql -uroot -p quant < sql/01_schema.sql
 mysql -uroot -p quant < sql/02_init_data.sql
+
+# 4) 工作台 + 端到端冒烟
+cd go && go run ./cmd/server -addr :8080 -web ../web &
+python3 scripts/smoke_test.py
 ```
 
 ---
 
-## 七、Web 交易工作台（九坤风格）
+## 七、Web 交易工作台（九坤风格 + 全量接口）
 
-设计语言借鉴九坤官网：**近白暖底 + 超大衬线数字 + 低饱和撞色 + 细线大留白**，
-内容换成交易运维：总资产、净值曲线、行业暴露、策略开关、持仓/订单/风控。
+设计语言借鉴九坤官网：**近白暖底 + 超大衬线数字 + 低饱和撞色 + 细线大留白**；
+内容换成交易运维：总资产、净值曲线、额度占用、行业暴露、策略开关、下单与审批。
 
 ![工作台总览](docs/web_dashboard.png)
 
 ```bash
 cd go && go run ./cmd/server -addr :8080 -web ../web
-# 打开 http://localhost:8080
+# 打开 http://localhost:8080   （接口文档：http://localhost:8080/api/v1/docs）
 ```
 
-- 后端：`internal/api` 提供 19 个 REST/SSE 接口（overview/positions/orders/fills/signals/risk/strategies/reconcile/stream…）
-- 前端：`web/` 零依赖原生 JS，SSE 每秒推送总览，Canvas 自绘净值曲线与迷你走势
-- 详见 [docs/08-frontend-api.md](docs/08-frontend-api.md)：九坤官网拆解 + 前端设计 + **后端接口缺口清单**
+### 1. 演示账号（5 角色）
+
+| 账号 | 口令 | 角色 | 能做什么 |
+|------|------|------|----------|
+| `admin` | `Admin@123` | 管理员 | 全权限 |
+| `trader` | `Trader@123` | 交易员 | 下单/改撤单、策略开关与参数、回测 |
+| `risk` | `Risk@123` | 风控官 | 规则变更、审批（参数/资金复核） |
+| `research` | `Research@123` | 研究员 | 因子注册维护、回测 |
+| `viewer` | `Viewer@123` | 只读 | 只看不改 |
+
+### 2. 14 个视图
+
+| 分组 | 视图 | 关键能力 |
+|------|------|----------|
+| 交易台 | 总览 / 持仓 / **订单** / 成交 / 信号 | 手动下单（风控→拆单→柜台）、订单详情、改单、撤单、批量撤单 |
+| 风控与策略 | **风控** / **策略** / **因子** / **回测** | 额度占用、规则改阈值（双人复核）、参数版本审批、因子 CRUD + IC 分析、异步回测 + 净值曲线 |
+| 运营 | 报表 / **资金** / **审计** / **系统** / 对账 | 日报与归因（CSV 导出）、出入金审批、审计追溯、任务触发、一键熔断 |
+
+### 3. 接口与治理
+
+**65 个接口**（GET 39 / POST 19 / PUT 4 / DELETE 3），全部带：
+
+- **统一 envelope**：`{code,msg,data,meta,request_id,ts}`，风控拦截单独用 422 + `code=1007`
+- **JWT + RBAC**：HS256 手写实现，5 角色 9 权限，写接口逐个声明所需权限
+- **幂等**：写接口带 `Idempotency-Key`，24h 内重放首次结果（网络抖动不会重复下单）
+- **限流**：令牌桶读写分离（读 80 rps / 写 8 rps），防策略异常刷单打挂柜台
+- **审计**：所有写操作留痕（用户/角色/IP/耗时/request_id/详情），可查可导出
+- **双人复核**：风控规则放宽 >20%、策略参数变动 >30%、出入金 —— 提交人不能自审
+
+完整清单、权限矩阵、WebSocket 协议见 **[docs/09-api-complete.md](docs/09-api-complete.md)**；
+前端设计转译与九坤官网拆解见 **[docs/08-frontend-api.md](docs/08-frontend-api.md)**。
+
+### 4. 效果
+
+| | |
+|---|---|
+| ![订单](docs/web_orders.png) | ![订单详情](docs/web_order_detail.png) |
+| ![风控](docs/web_risk.png) | ![回测](docs/web_backtest_result.png) |
+| ![审计](docs/web_audit.png) | ![接口契约](docs/web_api_docs.png) |
+
+### 5. 测试
+
+```bash
+# 单元测试（含接口层：JWT/RBAC/幂等/限流/审批流/分页）
+cd go && go test ./...
+
+# 端到端冒烟：61 项断言，14 个场景
+python3 scripts/smoke_test.py
+#   通过 61 / 失败 0
+```
 
 ---
 

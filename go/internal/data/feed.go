@@ -32,7 +32,8 @@ func NewMockFeed(symbols []string, n int) *MockFeed {
 	for i := 0; i < n; i++ {
 		for _, s := range symbols {
 			p := f.prices[s]
-			p = p * (1 + (rand.Float64()-0.5)*0.002) // ±0.1% 随机游走
+			// ±0.1% 随机游走 + 微幅正向漂移（贴近长期上行市场的样本形态）
+			p = p * (1 + (rand.Float64()-0.5)*0.002 + 0.00003)
 			f.prices[s] = p
 			var ask, bid [5]float64
 			for k := 0; k < 5; k++ {

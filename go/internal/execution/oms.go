@@ -39,7 +39,10 @@ func (o *OMS) Submit(order *common.Order) []common.Fill {
 	}
 
 	var done []common.Fill
-	for _, f := range fills {
+	for i := range fills {
+		// 必须取副本再传指针：Go 1.21 的 range 变量在整个循环中被复用，
+		// 直接 &f 会让人台账里所有成交都指向同一块内存，最终全部变成最后一笔。
+		f := fills[i]
 		order.FilledQty += f.FilledQty
 		if order.FilledQty >= order.OrigQty {
 			Transition(order, EvFullFill)
